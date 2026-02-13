@@ -2003,7 +2003,23 @@ void UpdateCoins(const CTransaction& tx, CCoinsViewCache& inputs, CTxUndo &txund
         for (const CTxIn &txin : tx.vin) {
             txundo.vprevout.emplace_back();
             bool is_spent = inputs.SpendCoin(txin.prevout, &txundo.vprevout.back());
-            assert(is_spent);
+            // CONSENSUS-CRITICAL: This condition should never trigger if prior validation
+            // (CheckTransaction, CheckTxInputs) succeeded. The duplicate input check in
+            // CheckTransaction() (CVE-2018-17144) and HaveInputs() in CheckTxInputs()
+            // guarantee all inputs exist and are unspent before UpdateCoins() is called.
+            // However, we must not use assert() here as it only triggers in debug builds,
+            // which would create a consensus split between debug and release builds.
+            // If this condition fails, it indicates either:
+            // 1. A bug in prior validation logic, or
+            // 2. Corruption of the UTXO database
+            // In either case, we must reject the transaction/block consistently.
+            if (!is_spent) {
+                LogPrintf("ERROR: %s: Failed to spend input %s in transaction %s - input missing or already spent\n",
+                         __func__, txin.prevout.ToString(), tx.GetHash().ToString());
+                // This is a critical error that should never happen in normal operation
+                throw std::runtime_error(strprintf("%s: input %s missing or already spent",
+                                                   __func__, txin.prevout.ToString()));
+            }
         }
     }
     // add outputs
